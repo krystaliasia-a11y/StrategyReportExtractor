@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir \"d:\\\\Github_dev\\\\StrategyReportExtractor\\\\src\")",
+      "Bash(python -c \"import bs4; import openpyxl; print\\('deps ok'\\)\")",
+      "Bash(python src/extractor.py)",
+      "Bash(python -c ':*)"
+    ]
+  }
+}
