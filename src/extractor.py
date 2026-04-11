@@ -32,10 +32,24 @@ COLUMNS = [
     "Short positions won %",
     "Long positions",
     "Long positions won %",
+    "Profit trades",
+    "Profit trades (% of total)",
+    "Loss trades",
+    "Loss trades (% of total)",
     "Largest profit trade",
     "Largest loss trade",
     "Average profit trade",
     "Average loss trade",
+    "Maximum consecutive wins",
+    "Maximum consecutive wins (profit in money)",
+    "Maximum consecutive losses",
+    "Maximum consecutive losses (loss in money)",
+    "Maximal consecutive profit",
+    "Maximal consecutive profit (count of wins)",
+    "Maximal consecutive loss",
+    "Maximal consecutive loss (count of losses)",
+    "Average consecutive wins",
+    "consecutive losses",
     "Parameters",
 ]
 
@@ -79,6 +93,14 @@ def maximal_drawdown_pct(value: str) -> float:
     return float(m.group(1)) if m else 0.0
 
 
+def split_num_bracket(raw: str):
+    """Parse 'A (B)' into ('A', 'B') for numeric bracket pairs like '32 (530.09)'."""
+    m = re.match(r"(-?[\d.]+)\s*\((-?[\d.]+)\)", raw.strip())
+    if m:
+        return m.group(1), m.group(2)
+    return raw, ""
+
+
 def parse_report(file_path: str) -> dict:
     with open(file_path, "r", encoding="utf-8", errors="replace") as f:
         content = f.read()
@@ -109,7 +131,7 @@ def parse_report(file_path: str) -> dict:
         #            <td>profit trade</td><td>value</td>
         #            <td>loss trade</td><td>value</td>
         if first_colspan == "2" and first.get("align") == "right" and len(tds) >= 5:
-            context = first_text  # "Largest", "Average", "Maximum", "Maximal"
+            context = first_text  # "Largest", "Average", "Maximum", "Maximal", or ""
             if context in ("Largest", "Average", "Maximum", "Maximal"):
                 # Use sub-labels (tds[1], tds[3]) as part of the key to avoid collisions
                 # e.g. "Average profit trade" vs "Average consecutive wins"
@@ -117,6 +139,11 @@ def parse_report(file_path: str) -> dict:
                 sub2 = get_td_text(tds[3])
                 flat[f"{context} {sub1}"] = get_td_text(tds[2])
                 flat[f"{context} {sub2}"] = get_td_text(tds[4])
+            elif context == "":
+                # e.g. "Profit trades (% of total)" / "Loss trades (% of total)" row
+                # <td colspan=2 align=right></td><td>label1</td><td>val1</td><td>label2</td><td>val2</td>
+                flat[get_td_text(tds[1])] = get_td_text(tds[2])
+                flat[get_td_text(tds[3])] = get_td_text(tds[4])
             continue
 
         # ── Skip rows whose first cell is colspan=2 but don't match above ───
@@ -159,10 +186,47 @@ def parse_report(file_path: str) -> dict:
     result["Long positions"] = long_count
     result["Long positions won %"] = long_pct
 
+    profit_trades_raw = flat.get("Profit trades (% of total)", "")
+    loss_trades_raw   = flat.get("Loss trades (% of total)", "")
+    profit_count, profit_pct = parse_positions(profit_trades_raw)
+    loss_count,   loss_pct   = parse_positions(loss_trades_raw)
+    result["Profit trades"]             = profit_count
+    result["Profit trades (% of total)"] = profit_pct
+    result["Loss trades"]               = loss_count
+    result["Loss trades (% of total)"]  = loss_pct
+
     result["Largest profit trade"] = flat.get("Largest profit trade", "")
     result["Largest loss trade"] = flat.get("Largest loss trade", "")
     result["Average profit trade"] = flat.get("Average profit trade", "")
     result["Average loss trade"] = flat.get("Average loss trade", "")
+
+    # "Maximum consecutive wins (profit in money)" raw = "32 (530.09)"
+    max_cw_raw = flat.get("Maximum consecutive wins (profit in money)", "")
+    max_cw_count, max_cw_money = split_num_bracket(max_cw_raw)
+    result["Maximum consecutive wins"]                  = max_cw_count
+    result["Maximum consecutive wins (profit in money)"] = max_cw_money
+
+    # "Maximum consecutive losses (loss in money)" raw = "1 (-29.76)"
+    max_cl_raw = flat.get("Maximum consecutive losses (loss in money)", "")
+    max_cl_count, max_cl_money = split_num_bracket(max_cl_raw)
+    result["Maximum consecutive losses"]                 = max_cl_count
+    result["Maximum consecutive losses (loss in money)"] = max_cl_money
+
+    # "Maximal consecutive profit (count of wins)" raw = "530.09 (32)"
+    mxl_cp_raw = flat.get("Maximal consecutive profit (count of wins)", "")
+    mxl_cp_profit, mxl_cp_count = split_num_bracket(mxl_cp_raw)
+    result["Maximal consecutive profit"]               = mxl_cp_profit
+    result["Maximal consecutive profit (count of wins)"] = mxl_cp_count
+
+    # "Maximal consecutive loss (count of losses)" raw = "-29.76 (1)"
+    mxl_cl_raw = flat.get("Maximal consecutive loss (count of losses)", "")
+    mxl_cl_loss, mxl_cl_count = split_num_bracket(mxl_cl_raw)
+    result["Maximal consecutive loss"]                  = mxl_cl_loss
+    result["Maximal consecutive loss (count of losses)"] = mxl_cl_count
+
+    result["Average consecutive wins"] = flat.get("Average consecutive wins", "")
+    result["consecutive losses"]       = flat.get("Average consecutive losses", "")
+
     result["Parameters"] = flat.get("Parameters", "")
 
     return result
