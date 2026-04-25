@@ -309,6 +309,67 @@ def parse_report(file_path: str) -> dict:
 
 RED_FILL = PatternFill(fill_type="solid", fgColor="FF0000")
 
+_PARAM_NAMES = [
+    "stop_after_earning_N_pct",
+    "TP_RATIO_pct",
+    "TP_PULLBACK_pct",
+    "DROP_RATIO_pct",
+    "DROP_BROUNCE_pct",
+    "max_orders_per_side",
+    "first_max_buy_sell_when_program_starts",
+]
+
+
+def extract_param(params_str: str, param_name: str) -> str:
+    """Extract a named parameter value from a parameters string like 'key=value; key2=value2'."""
+    m = re.search(rf"{re.escape(param_name)}\s*=\s*([^\s;,]+)", params_str)
+    return m.group(1) if m else ""
+
+
+def add_analysis_sheet(wb, rows: list):
+    ws = wb.create_sheet(title="analysis")
+
+    header_font = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill(fill_type="solid", fgColor="4472C4")
+    header_align = Alignment(horizontal="center", vertical="center")
+
+    ws.cell(row=1, column=1, value="Value Name").font = header_font
+    ws.cell(row=1, column=1).fill = header_fill
+    ws.cell(row=1, column=1).alignment = header_align
+    ws.cell(row=1, column=2, value="Value").font = header_font
+    ws.cell(row=1, column=2).fill = header_fill
+    ws.cell(row=1, column=2).alignment = header_align
+
+    total_net_profit = sum(
+        r.get("Total net profit") or 0 for r in rows
+        if r.get("Total net profit") != ""
+    )
+    drawdown_values = [
+        r.get("Maximal drawdown") for r in rows
+        if r.get("Maximal drawdown") not in ("", None)
+    ]
+    total_max_drawdown = max(drawdown_values) if drawdown_values else ""
+
+    first_params = next(
+        (r.get("Parameters", "") for r in rows if r.get("Parameters", "")), ""
+    )
+
+    analysis_rows = [
+        ("Total net profit (sum)", total_net_profit),
+        ("Maximal drawdown (max)", total_max_drawdown),
+    ] + [(name, extract_param(first_params, name)) for name in _PARAM_NAMES]
+
+    for row_idx, (name, value) in enumerate(analysis_rows, start=2):
+        name_cell = ws.cell(row=row_idx, column=1, value=name)
+        name_cell.alignment = Alignment(vertical="top")
+        val_cell = ws.cell(row=row_idx, column=2, value=value)
+        val_cell.alignment = Alignment(vertical="top")
+        if isinstance(value, float):
+            val_cell.number_format = "#,##0.00"
+
+    ws.column_dimensions["A"].width = 45
+    ws.column_dimensions["B"].width = 25
+
 
 def write_excel(rows: list, output_path: str):
     wb = openpyxl.Workbook()
@@ -367,6 +428,8 @@ def write_excel(rows: list, output_path: str):
 
     # Freeze header row
     ws.freeze_panes = "A2"
+
+    add_analysis_sheet(wb, rows)
 
     wb.save(output_path)
     print(f"Saved: {output_path}")
