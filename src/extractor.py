@@ -53,9 +53,92 @@ COLUMNS = [
     "Parameters",
 ]
 
+# Excel number formats keyed by column name
+_FMT_DECIMAL = "#,##0.00"
+_FMT_INT     = "#,##0"
+_FMT_PCT     = "0.00%"
+
+COLUMN_FORMATS = {
+    "Spread":                                       _FMT_DECIMAL,
+    "Initial deposit":                              _FMT_DECIMAL,
+    "Total net profit":                             _FMT_DECIMAL,
+    "Gross profit":                                 _FMT_DECIMAL,
+    "Gross loss":                                   _FMT_DECIMAL,
+    "Profit factor":                                _FMT_DECIMAL,
+    "Expected payoff":                              _FMT_DECIMAL,
+    "Absolute drawdown":                            _FMT_DECIMAL,
+    "Maximal drawdown":                             _FMT_DECIMAL,
+    "Relative drawdown":                            _FMT_DECIMAL,
+    "Total trades":                                 _FMT_INT,
+    "Short positions":                              _FMT_INT,
+    "Long positions":                               _FMT_INT,
+    "Profit trades":                                _FMT_INT,
+    "Loss trades":                                  _FMT_INT,
+    "Largest profit trade":                         _FMT_DECIMAL,
+    "Largest loss trade":                           _FMT_DECIMAL,
+    "Average profit trade":                         _FMT_DECIMAL,
+    "Average loss trade":                           _FMT_DECIMAL,
+    "Maximum consecutive wins":                     _FMT_INT,
+    "Maximum consecutive wins (profit in money)":   _FMT_DECIMAL,
+    "Maximum consecutive losses":                   _FMT_INT,
+    "Maximum consecutive losses (loss in money)":   _FMT_DECIMAL,
+    "Maximal consecutive profit":                   _FMT_DECIMAL,
+    "Maximal consecutive profit (count of wins)":   _FMT_INT,
+    "Maximal consecutive loss":                     _FMT_DECIMAL,
+    "Maximal consecutive loss (count of losses)":   _FMT_INT,
+    "Average consecutive wins":                     _FMT_INT,
+    "consecutive losses":                           _FMT_INT,
+    "Modelling quality":                            _FMT_PCT,
+    "Short positions won %":                        _FMT_PCT,
+    "Long positions won %":                         _FMT_PCT,
+    "Profit trades (% of total)":                   _FMT_PCT,
+    "Loss trades (% of total)":                     _FMT_PCT,
+}
+
 
 def get_td_text(td):
     return td.get_text(separator=" ", strip=True) if td else ""
+
+
+def strip_bracket(raw: str) -> str:
+    """Remove trailing '(...)' from a string: '464.06 (4.49%)' → '464.06'."""
+    return re.sub(r"\s*\([^)]*\)\s*$", "", raw).strip()
+
+
+def to_float(s) -> "float | str":
+    """Convert a string (optionally with commas or %) to float, or '' on failure."""
+    if s == "" or s is None:
+        return ""
+    try:
+        return float(str(s).replace(",", "").replace("%", "").strip())
+    except ValueError:
+        return ""
+
+
+def to_int(s) -> "int | str":
+    """Convert a string to int, or '' on failure."""
+    if s == "" or s is None:
+        return ""
+    try:
+        return int(float(str(s).replace(",", "").strip()))
+    except ValueError:
+        return ""
+
+
+def to_pct(s) -> "float | str":
+    """Convert '45.67%' or '45.67' to 0.4567 for Excel percentage format."""
+    if s == "" or s is None:
+        return ""
+    try:
+        return float(str(s).replace("%", "").strip()) / 100
+    except ValueError:
+        return ""
+
+
+def parse_modelling_quality(raw: str) -> "float | str":
+    """Extract percentage from 'n.nn % (...)' or 'n.nn%' → decimal for Excel."""
+    m = re.search(r"([\d.]+)\s*%", raw)
+    return float(m.group(1)) / 100 if m else ""
 
 
 def parse_positions(raw):
@@ -85,12 +168,6 @@ def parse_period(period_raw: str, filename: str) -> str:
     if start_date and end_date:
         return f"{start_date} - {end_date}"
     return start_date or end_date or period_raw
-
-
-def maximal_drawdown_pct(value: str) -> float:
-    """Extract the percentage from '464.06 (4.49%)' → 4.49."""
-    m = re.search(r"\(([\d.]+)%\)", value)
-    return float(m.group(1)) if m else 0.0
 
 
 def split_num_bracket(raw: str):
@@ -133,15 +210,11 @@ def parse_report(file_path: str) -> dict:
         if first_colspan == "2" and first.get("align") == "right" and len(tds) >= 5:
             context = first_text  # "Largest", "Average", "Maximum", "Maximal", or ""
             if context in ("Largest", "Average", "Maximum", "Maximal"):
-                # Use sub-labels (tds[1], tds[3]) as part of the key to avoid collisions
-                # e.g. "Average profit trade" vs "Average consecutive wins"
                 sub1 = get_td_text(tds[1])
                 sub2 = get_td_text(tds[3])
                 flat[f"{context} {sub1}"] = get_td_text(tds[2])
                 flat[f"{context} {sub2}"] = get_td_text(tds[4])
             elif context == "":
-                # e.g. "Profit trades (% of total)" / "Loss trades (% of total)" row
-                # <td colspan=2 align=right></td><td>label1</td><td>val1</td><td>label2</td><td>val2</td>
                 flat[get_td_text(tds[1])] = get_td_text(tds[2])
                 flat[get_td_text(tds[3])] = get_td_text(tds[4])
             continue
@@ -164,68 +237,70 @@ def parse_report(file_path: str) -> dict:
 
     result["Symbol"] = flat.get("Symbol", "")
     result["Period"] = parse_period(flat.get("Period", ""), Path(file_path).name)
-    result["Modelling quality"] = flat.get("Modelling quality", "")
-    result["Spread"] = flat.get("Spread", "")
-    result["Initial deposit"] = flat.get("Initial deposit", "")
-    result["Total net profit"] = flat.get("Total net profit", "")
-    result["Gross profit"] = flat.get("Gross profit", "")
-    result["Gross loss"] = flat.get("Gross loss", "")
-    result["Profit factor"] = flat.get("Profit factor", "")
-    result["Expected payoff"] = flat.get("Expected payoff", "")
-    result["Absolute drawdown"] = flat.get("Absolute drawdown", "")
-    result["Maximal drawdown"] = flat.get("Maximal drawdown", "")
-    result["Relative drawdown"] = flat.get("Relative drawdown", "")
-    result["Total trades"] = flat.get("Total trades", "")
+    result["Modelling quality"] = parse_modelling_quality(flat.get("Modelling quality", ""))
+    result["Spread"]            = to_float(flat.get("Spread", ""))
+    result["Initial deposit"]   = to_float(flat.get("Initial deposit", ""))
+    result["Total net profit"]  = to_float(flat.get("Total net profit", ""))
+    result["Gross profit"]      = to_float(flat.get("Gross profit", ""))
+    result["Gross loss"]        = to_float(flat.get("Gross loss", ""))
+    result["Profit factor"]     = to_float(flat.get("Profit factor", ""))
+    result["Expected payoff"]   = to_float(flat.get("Expected payoff", ""))
+    result["Absolute drawdown"] = to_float(flat.get("Absolute drawdown", ""))
+    # Strip bracket value (e.g. '464.06 (4.49%)' → 464.06)
+    result["Maximal drawdown"]  = to_float(strip_bracket(flat.get("Maximal drawdown", "")))
+    # Strip bracket value (e.g. '4.49% (464.06)' → 4.49)
+    result["Relative drawdown"] = to_float(strip_bracket(flat.get("Relative drawdown", "")))
+    result["Total trades"]      = to_int(flat.get("Total trades", ""))
 
     short_raw = flat.get("Short positions (won %)", "")
-    long_raw = flat.get("Long positions (won %)", "")
+    long_raw  = flat.get("Long positions (won %)", "")
     short_count, short_pct = parse_positions(short_raw)
-    long_count, long_pct = parse_positions(long_raw)
-    result["Short positions"] = short_count
-    result["Short positions won %"] = short_pct
-    result["Long positions"] = long_count
-    result["Long positions won %"] = long_pct
+    long_count,  long_pct  = parse_positions(long_raw)
+    result["Short positions"]       = to_int(short_count)
+    result["Short positions won %"] = to_pct(short_pct)
+    result["Long positions"]        = to_int(long_count)
+    result["Long positions won %"]  = to_pct(long_pct)
 
     profit_trades_raw = flat.get("Profit trades (% of total)", "")
     loss_trades_raw   = flat.get("Loss trades (% of total)", "")
     profit_count, profit_pct = parse_positions(profit_trades_raw)
     loss_count,   loss_pct   = parse_positions(loss_trades_raw)
-    result["Profit trades"]             = profit_count
-    result["Profit trades (% of total)"] = profit_pct
-    result["Loss trades"]               = loss_count
-    result["Loss trades (% of total)"]  = loss_pct
+    result["Profit trades"]              = to_int(profit_count)
+    result["Profit trades (% of total)"] = to_pct(profit_pct)
+    result["Loss trades"]                = to_int(loss_count)
+    result["Loss trades (% of total)"]   = to_pct(loss_pct)
 
-    result["Largest profit trade"] = flat.get("Largest profit trade", "")
-    result["Largest loss trade"] = flat.get("Largest loss trade", "")
-    result["Average profit trade"] = flat.get("Average profit trade", "")
-    result["Average loss trade"] = flat.get("Average loss trade", "")
+    result["Largest profit trade"] = to_float(flat.get("Largest profit trade", ""))
+    result["Largest loss trade"]   = to_float(flat.get("Largest loss trade", ""))
+    result["Average profit trade"] = to_float(flat.get("Average profit trade", ""))
+    result["Average loss trade"]   = to_float(flat.get("Average loss trade", ""))
 
     # "Maximum consecutive wins (profit in money)" raw = "32 (530.09)"
     max_cw_raw = flat.get("Maximum consecutive wins (profit in money)", "")
     max_cw_count, max_cw_money = split_num_bracket(max_cw_raw)
-    result["Maximum consecutive wins"]                  = max_cw_count
-    result["Maximum consecutive wins (profit in money)"] = max_cw_money
+    result["Maximum consecutive wins"]                   = to_int(max_cw_count)
+    result["Maximum consecutive wins (profit in money)"] = to_float(max_cw_money)
 
     # "Maximum consecutive losses (loss in money)" raw = "1 (-29.76)"
     max_cl_raw = flat.get("Maximum consecutive losses (loss in money)", "")
     max_cl_count, max_cl_money = split_num_bracket(max_cl_raw)
-    result["Maximum consecutive losses"]                 = max_cl_count
-    result["Maximum consecutive losses (loss in money)"] = max_cl_money
+    result["Maximum consecutive losses"]                  = to_int(max_cl_count)
+    result["Maximum consecutive losses (loss in money)"]  = to_float(max_cl_money)
 
     # "Maximal consecutive profit (count of wins)" raw = "530.09 (32)"
     mxl_cp_raw = flat.get("Maximal consecutive profit (count of wins)", "")
     mxl_cp_profit, mxl_cp_count = split_num_bracket(mxl_cp_raw)
-    result["Maximal consecutive profit"]               = mxl_cp_profit
-    result["Maximal consecutive profit (count of wins)"] = mxl_cp_count
+    result["Maximal consecutive profit"]                = to_float(mxl_cp_profit)
+    result["Maximal consecutive profit (count of wins)"] = to_int(mxl_cp_count)
 
     # "Maximal consecutive loss (count of losses)" raw = "-29.76 (1)"
     mxl_cl_raw = flat.get("Maximal consecutive loss (count of losses)", "")
     mxl_cl_loss, mxl_cl_count = split_num_bracket(mxl_cl_raw)
-    result["Maximal consecutive loss"]                  = mxl_cl_loss
-    result["Maximal consecutive loss (count of losses)"] = mxl_cl_count
+    result["Maximal consecutive loss"]                   = to_float(mxl_cl_loss)
+    result["Maximal consecutive loss (count of losses)"] = to_int(mxl_cl_count)
 
-    result["Average consecutive wins"] = flat.get("Average consecutive wins", "")
-    result["consecutive losses"]       = flat.get("Average consecutive losses", "")
+    result["Average consecutive wins"] = to_int(flat.get("Average consecutive wins", ""))
+    result["consecutive losses"]       = to_int(flat.get("Average consecutive losses", ""))
 
     result["Parameters"] = flat.get("Parameters", "")
 
@@ -256,21 +331,29 @@ def write_excel(rows: list, output_path: str):
         for col_idx, col_name in enumerate(COLUMNS, start=1):
             value = row_data.get(col_name, "")
             cell = ws.cell(row=row_idx, column=col_idx, value=value)
-            # No wrap for any cell (Parameters included)
             cell.alignment = Alignment(vertical="top", wrap_text=False)
 
-            # ── Conditional red fill ─────────────────────────────────────────
-            # Maximal drawdown: red if the bracketed % > 30
-            if col_name == "Maximal drawdown" and value:
-                if maximal_drawdown_pct(str(value)) > 30:
-                    cell.fill = RED_FILL
+            # Apply number / percentage format where defined
+            fmt = COLUMN_FORMATS.get(col_name)
+            if fmt and value != "":
+                cell.number_format = fmt
 
-            # Total net profit: red if value is negative
-            if col_name == "Total net profit" and value:
+            # ── Conditional red fill ─────────────────────────────────────────
+            # Maximal drawdown: red if Relative drawdown % > 30
+            if col_name == "Maximal drawdown":
+                rel_dd = row_data.get("Relative drawdown", "")
                 try:
-                    if float(str(value).replace(",", "")) < 0:
+                    if float(rel_dd) > 30:
                         cell.fill = RED_FILL
-                except ValueError:
+                except (ValueError, TypeError):
+                    pass
+
+            # Total net profit: red if negative
+            if col_name == "Total net profit" and value != "":
+                try:
+                    if float(value) < 0:
+                        cell.fill = RED_FILL
+                except (ValueError, TypeError):
                     pass
 
     # Auto-size columns (capped at 40; Parameters capped at 60)
