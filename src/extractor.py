@@ -340,23 +340,64 @@ def add_analysis_sheet(wb, rows: list):
     ws.cell(row=1, column=2).fill = header_fill
     ws.cell(row=1, column=2).alignment = header_align
 
-    total_net_profit = sum(
-        r.get("Total net profit") or 0 for r in rows
-        if r.get("Total net profit") != ""
-    )
-    drawdown_values = [
-        r.get("Maximal drawdown") for r in rows
-        if r.get("Maximal drawdown") not in ("", None)
-    ]
-    total_max_drawdown = max(drawdown_values) if drawdown_values else ""
-
     first_params = next(
         (r.get("Parameters", "") for r in rows if r.get("Parameters", "")), ""
     )
 
+    real_equity = next(
+        (r.get("Initial deposit") for r in rows
+         if r.get("Initial deposit") not in ("", None)),
+        0,
+    ) or 0
+
+    stop_pct = to_float(extract_param(first_params, "stop_after_earning_N_pct"))
+    tep = (real_equity * stop_pct / 100) if isinstance(stop_pct, float) and real_equity else None
+
+    # Total net profit aggregates
+    tnp_values = [
+        r.get("Total net profit") for r in rows
+        if r.get("Total net profit") not in ("", None)
+    ]
+    total_net_profit  = sum(tnp_values)
+    count_tnp_gte_tep = sum(1 for v in tnp_values if tep is not None and v >= tep)
+    count_tnp_zero    = sum(1 for v in tnp_values if v == 0)
+    tnp_neg_values    = [v for v in tnp_values if v < 0]
+    count_tnp_neg     = len(tnp_neg_values)
+    avg_tnp_neg       = sum(tnp_neg_values) / len(tnp_neg_values) if tnp_neg_values else ""
+
+    # Maximal drawdown aggregates
+    mdd_values = [
+        r.get("Maximal drawdown") for r in rows
+        if r.get("Maximal drawdown") not in ("", None)
+    ]
+    total_max_drawdown = max(mdd_values) if mdd_values else ""
+
+    def _mdd_count_avg(threshold_pct):
+        subset = [v for v in mdd_values if real_equity and v > real_equity * threshold_pct]
+        count = len(subset)
+        avg   = sum(subset) / len(subset) if subset else ""
+        return count, avg
+
+    count_mdd_gt_20pct, avg_mdd_gt_20pct = _mdd_count_avg(0.20)
+    count_mdd_gt_30pct, avg_mdd_gt_30pct = _mdd_count_avg(0.30)
+    count_mdd_gt_40pct, avg_mdd_gt_40pct = _mdd_count_avg(0.40)
+    count_mdd_gt_50pct, avg_mdd_gt_50pct = _mdd_count_avg(0.50)
+
     analysis_rows = [
-        ("Total net profit (sum)", total_net_profit),
-        ("Maximal drawdown (max)", total_max_drawdown),
+        ("Total net profit (sum)",                  total_net_profit),
+        ("Count TNP >= TEP",                        count_tnp_gte_tep),
+        ("Count TNP = 0",                           count_tnp_zero),
+        ("Count TNP < 0",                           count_tnp_neg),
+        ("Average TNP < 0",                         avg_tnp_neg),
+        ("Maximal drawdown (max)",                  total_max_drawdown),
+        ("Count MDD > real_equity * 20%",           count_mdd_gt_20pct),
+        ("Count MDD > real_equity * 30%",           count_mdd_gt_30pct),
+        ("Count MDD > real_equity * 40%",           count_mdd_gt_40pct),
+        ("Count MDD > real_equity * 50%",           count_mdd_gt_50pct),
+        ("Average MDD > real_equity * 20%",         avg_mdd_gt_20pct),
+        ("Average MDD > real_equity * 30%",         avg_mdd_gt_30pct),
+        ("Average MDD > real_equity * 40%",         avg_mdd_gt_40pct),
+        ("Average MDD > real_equity * 50%",         avg_mdd_gt_50pct),
     ] + [(name, extract_param(first_params, name)) for name in _PARAM_NAMES]
 
     for row_idx, (name, value) in enumerate(analysis_rows, start=2):
