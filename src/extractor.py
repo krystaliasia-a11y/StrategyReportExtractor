@@ -588,6 +588,26 @@ def write_excel(rows: list, output_path: str):
     print(f"Saved: {output_path}")
 
 
+def process_folder(folder: Path, output_dir: Path, pip_config: dict):
+    htm_files = sorted(folder.glob("*.htm")) + sorted(folder.glob("*.html"))
+    if not htm_files:
+        print(f"  No .htm / .html files found in {folder}, skipping.")
+        return
+
+    rows = []
+    for htm_file in htm_files:
+        print(f"  Processing: {htm_file.name}")
+        try:
+            row = parse_report(str(htm_file), pip_config)
+            rows.append(row)
+        except Exception as exc:
+            print(f"    ERROR: {exc}")
+
+    output_path = str(output_dir / f"summary_{folder.name}.xlsx")
+    write_excel(rows, output_path)
+    print(f"  → {len(rows)} report(s) written to summary_{folder.name}.xlsx")
+
+
 def main():
     base_dir = Path(__file__).parent.parent
     input_dir = base_dir / "input"
@@ -603,23 +623,19 @@ def main():
     else:
         print(f"Warning: pip_config.json not found at {pip_config_path}, defaulting to 0.0001 per pip")
 
-    htm_files = sorted(input_dir.glob("*.htm")) + sorted(input_dir.glob("*.html"))
-    if not htm_files:
-        print(f"No .htm / .html files found in {input_dir}")
+    subfolders = sorted(p for p in input_dir.iterdir() if p.is_dir())
+    if not subfolders:
+        print(f"No subfolders found in {input_dir}.")
+        print("Please put each set of .htm reports into its own subfolder inside 'input/'.")
         return
 
-    rows = []
-    for htm_file in htm_files:
-        print(f"Processing: {htm_file.name}")
-        try:
-            row = parse_report(str(htm_file), pip_config)
-            rows.append(row)
-        except Exception as exc:
-            print(f"  ERROR: {exc}")
+    print(f"Found {len(subfolders)} folder(s) to process.\n")
+    for folder in subfolders:
+        print(f"[{folder.name}]")
+        process_folder(folder, output_dir, pip_config)
+        print()
 
-    output_path = str(output_dir / "summary.xlsx")
-    write_excel(rows, output_path)
-    print(f"\nDone. {len(rows)} report(s) extracted.")
+    print("Done.")
 
 
 if __name__ == "__main__":
