@@ -3,8 +3,10 @@ Strategy Tester Report Extractor
 Reads all .htm files from ../input, extracts key metrics, and writes to ../output/summary.xlsx
 """
 
+import json
 import os
 import re
+import statistics
 from pathlib import Path
 
 from bs4 import BeautifulSoup
@@ -178,7 +180,72 @@ def split_num_bracket(raw: str):
     return raw, ""
 
 
-def parse_report(file_path: str) -> dict:
+def parse_pip_period_bracket(period_raw: str) -> str:
+    """Extract the trailing bracket date range from Period text.
+    '1 Hour (H1) ... (2011.01.01 - 2011.12.31)' → '2011.01.01 - 2011.12.31'
+    """
+    m = re.search(r"\((\d{4}\.\d{2}\.\d{2}\s*-\s*\d{4}\.\d{2}\.\d{2})\)\s*$", period_raw)
+    return m.group(1).strip() if m else period_raw
+
+
+def parse_trades_from_soup(soup, pip_unit: float) -> dict:
+    """Parse the trade list table and return per-report pip statistics.
+
+    Pip = abs(open_price - close_price) / pip_unit for each matched trade pair.
+    Returns avg, max, min, median; empty string for each when no trades found.
+    """
+    open_prices = {}  # order_id -> open_price
+
+    in_trade_table = False
+    pip_list = []
+
+    for table in soup.find_all("table"):
+        for row in table.find_all("tr"):
+            tds = row.find_all("td")
+            if not tds:
+                continue
+
+            # Detect the trade table by its grey header row
+            if row.get("bgcolor") == "#C0C0C0":
+                texts = [td.get_text(strip=True) for td in tds]
+                if "Type" in texts and "Order" in texts and "Price" in texts:
+                    in_trade_table = True
+                    continue
+
+            if not in_trade_table:
+                continue
+            if len(tds) < 8:
+                continue
+
+            trade_type = tds[2].get_text(strip=True).lower()
+            order_str  = tds[3].get_text(strip=True)
+            price_str  = tds[5].get_text(strip=True)
+
+            try:
+                order_id = int(order_str)
+                price    = float(price_str)
+            except ValueError:
+                continue
+
+            if trade_type in ("buy", "sell"):
+                open_prices[order_id] = price
+            elif trade_type in ("close", "t/p", "s/l"):
+                if order_id in open_prices:
+                    pip = abs(open_prices[order_id] - price) / pip_unit
+                    pip_list.append(round(pip, 2))
+
+    if not pip_list:
+        return {"_pip_avg": "", "_pip_max": "", "_pip_min": "", "_pip_median": ""}
+
+    return {
+        "_pip_avg":    round(sum(pip_list) / len(pip_list), 2),
+        "_pip_max":    max(pip_list),
+        "_pip_min":    min(pip_list),
+        "_pip_median": round(statistics.median(pip_list), 2),
+    }
+
+
+def parse_report(file_path: str, pip_config: dict = None) -> dict:
     with open(file_path, "r", encoding="utf-8", errors="replace") as f:
         content = f.read()
 
@@ -304,6 +371,19 @@ def parse_report(file_path: str) -> dict:
 
     result["Parameters"] = flat.get("Parameters", "")
 
+    # ── Per-trade pip statistics ─────────────────────────────────────────────
+    period_raw = flat.get("Period", "")
+    result["_period_bracket"] = parse_pip_period_bracket(period_raw)
+
+    if pip_config is not None:
+        symbol_raw = flat.get("Symbol", "")
+        symbol = symbol_raw.split()[0] if symbol_raw else ""
+        pip_unit = pip_config.get(symbol, 0.0001)
+        pip_stats = parse_trades_from_soup(soup, pip_unit)
+        result.update(pip_stats)
+    else:
+        result.update({"_pip_avg": "", "_pip_max": "", "_pip_min": "", "_pip_median": ""})
+
     return result
 
 
@@ -412,6 +492,37 @@ def add_analysis_sheet(wb, rows: list):
     ws.column_dimensions["B"].width = 25
 
 
+def add_pip_analysis_sheet(wb, rows: list):
+    ws = wb.create_sheet(title="pip_analysis")
+
+    headers = ["Period", "Avg Pip", "Max Pip", "Min Pip", "Median Pip"]
+    keys    = ["_period_bracket", "_pip_avg", "_pip_max", "_pip_min", "_pip_median"]
+
+    header_font  = Font(bold=True, color="FFFFFF")
+    header_fill  = PatternFill(fill_type="solid", fgColor="4472C4")
+    header_align = Alignment(horizontal="center", vertical="center")
+
+    for col_idx, h in enumerate(headers, start=1):
+        cell           = ws.cell(row=1, column=col_idx, value=h)
+        cell.font      = header_font
+        cell.fill      = header_fill
+        cell.alignment = header_align
+
+    for row_idx, row in enumerate(rows, start=2):
+        for col_idx, key in enumerate(keys, start=1):
+            value           = row.get(key, "")
+            cell            = ws.cell(row=row_idx, column=col_idx, value=value)
+            cell.alignment  = Alignment(vertical="top")
+            if col_idx > 1 and isinstance(value, float):
+                cell.number_format = "#,##0.00"
+
+    ws.column_dimensions["A"].width = 28
+    for col in ["B", "C", "D", "E"]:
+        ws.column_dimensions[col].width = 14
+
+    ws.freeze_panes = "A2"
+
+
 def write_excel(rows: list, output_path: str):
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -471,6 +582,7 @@ def write_excel(rows: list, output_path: str):
     ws.freeze_panes = "A2"
 
     add_analysis_sheet(wb, rows)
+    add_pip_analysis_sheet(wb, rows)
 
     wb.save(output_path)
     print(f"Saved: {output_path}")
@@ -482,6 +594,15 @@ def main():
     output_dir = base_dir / "output"
     output_dir.mkdir(exist_ok=True)
 
+    pip_config_path = base_dir / "config" / "pip_config.json"
+    pip_config = {}
+    if pip_config_path.exists():
+        with open(pip_config_path, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+        pip_config = {k: v for k, v in raw.items() if not k.startswith("_")}
+    else:
+        print(f"Warning: pip_config.json not found at {pip_config_path}, defaulting to 0.0001 per pip")
+
     htm_files = sorted(input_dir.glob("*.htm")) + sorted(input_dir.glob("*.html"))
     if not htm_files:
         print(f"No .htm / .html files found in {input_dir}")
@@ -491,7 +612,7 @@ def main():
     for htm_file in htm_files:
         print(f"Processing: {htm_file.name}")
         try:
-            row = parse_report(str(htm_file))
+            row = parse_report(str(htm_file), pip_config)
             rows.append(row)
         except Exception as exc:
             print(f"  ERROR: {exc}")
