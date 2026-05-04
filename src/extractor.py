@@ -478,7 +478,7 @@ def add_analysis_sheet(wb, rows: list):
         ("Average MDD > real_equity * 30%",         avg_mdd_gt_30pct),
         ("Average MDD > real_equity * 40%",         avg_mdd_gt_40pct),
         ("Average MDD > real_equity * 50%",         avg_mdd_gt_50pct),
-    ] + [(name, extract_param(first_params, name)) for name in _PARAM_NAMES]
+    ] + [(name, to_float(extract_param(first_params, name))) for name in _PARAM_NAMES]
 
     for row_idx, (name, value) in enumerate(analysis_rows, start=2):
         name_cell = ws.cell(row=row_idx, column=1, value=name)
@@ -487,6 +487,8 @@ def add_analysis_sheet(wb, rows: list):
         val_cell.alignment = Alignment(vertical="top")
         if isinstance(value, float):
             val_cell.number_format = "#,##0.00"
+        elif isinstance(value, int):
+            val_cell.number_format = "#,##0"
 
     ws.column_dimensions["A"].width = 45
     ws.column_dimensions["B"].width = 25
